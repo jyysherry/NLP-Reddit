@@ -1,0 +1,217 @@
+---
+title: "Reddit_word_embedding_example_code"
+author: "Sherry Yueyi Jiang"
+date: "6/29/2020"
+output: html_document
+---
+
+```{r}
+library(tidytext)
+library(tidyverse)
+library(lubridate)
+
+```
+
+```{r}
+setwd("~/Documents/CSS Summer Institute /hopelab/")
+
+```
+
+Datasets
+```{r}
+march2019 <- read.csv("reddit_2019march_all.csv")
+april2019 <- read.csv("reddit_2019april_all.csv")
+may2019 <- read.csv("reddit_2019may_all.csv")
+
+maraprmay2019 <- march2019 %>%
+  rbind(april2019) %>%
+  rbind(may2019) %>%
+  select(-url) # removing URL column; not present in 2020 data
+
+maraprmay2019$post <- maraprmay2019 %>%
+                      with(paste(title, selftext, sep= " "))
+
+maraprmay2020 <- read.csv( "submissions_teenagers_2020.csv") 
+                            
+                
+# Reformatting dates
+maraprmay2019$created_utc <- as_datetime(maraprmay2019$created_utc)
+
+```
+
+Word2Vec Models with Keras/Neural Networks
+https://cbail.github.io/textasdata/word2vec/rmarkdown/word2vec.html
+```{r}
+library("keras")
+library(reticulate)
+library(purrr)
+library(text2vec) 
+library(dplyr)
+library(Rtsne)
+library(ggplot2)
+library(plotly)
+library(stringr)
+library(tm)
+
+```
+
+Preprocessing
+```{r}
+
+maraprmay2019_clean <- maraprmay2019 %>%
+           mutate(post = str_replace_all(post, "https.+",""), # Many contain URLs, which we don't want considered in the mode
+                  post = str_replace_all(post, "[^[:alnum:]]", " "), #remove all the non-alphanumeric characters
+                  post = str_replace_all(post, "removed", ""), #remove "removed"posts
+                  post = str_replace_all(post, "deleted", "") %>% #remove "deleted"posts
+                  tolower() %>%  # turn text into lowercase
+                  stripWhitespace()  %>% # remove whitespace
+                  removeNumbers()  %>% # remove numbers
+                  stemDocument() %>% #stemming
+                  removePunctuation() #remove punctuation
+) 
+
+
+library(tm)
+library(stringr)
+
+
+maraprmay2020_clean <- maraprmay2020 %>%
+           mutate(post = str_replace_all(post, "https.+",""), # Many contain URLs, which we don't want considered in the mode
+                  post = str_replace_all(post, "[^[:alnum:]]", " "), #remove all the non-alphanumeric characters
+                  post = str_replace_all(post, "removed", ""), #remove "removed"posts
+                  post = str_replace_all(post, "deleted", "") %>% #remove "deleted"posts
+                  tolower() %>%  # turn text into lowercase
+                  stripWhitespace()  %>% # remove whitespace
+                  removeNumbers()  %>% # remove numbers
+                  stemDocument() %>% #stemming
+                  removePunctuation() #remove punctuation
+
+)
+
+```
+
+
+Tokenization
+```{r}
+
+tokenizer <- text_tokenizer(num_words = 20000) #maximum number of words to keep (based on frequency)
+
+tokenizer %>% fit_text_tokenizer(maraprmay2020_clean$post)
+```
+
+
+
+Create skipgrams function:
+```{r}
+skipgrams_generator <- function(text, tokenizer, window_size, negative_samples) {
+  gen <- texts_to_sequences_generator(tokenizer, sample(text))
+  function() {
+    skip <- generator_next(gen) %>%
+      skipgrams(
+        vocabulary_size = tokenizer$num_words, 
+        window_size = window_size, 
+        negative_samples = 1
+      )
+    x <- transpose(skip$couples) %>% map(. %>% unlist %>% as.matrix(ncol = 1))
+    y <- skip$labels %>% as.matrix(ncol = 1)
+    list(x, y)
+  }
+}
+
+```
+
+Determine model tuning output
+```{r}
+
+embedding_size <- 128  # dimension of embedding vector
+skip_window <- 5       # number of skip-gram
+num_sampled <- 1       # number of negative sample for each word
+
+input_target <- layer_input(shape = 1)
+input_context <- layer_input(shape = 1)
+```
+
+Model architecture
+```{r}
+
+embedding <- layer_embedding(
+  input_dim = tokenizer$num_words + 1, 
+  output_dim = embedding_size, 
+  input_length = 1, 
+  name = "embedding"
+)
+
+target_vector <- input_target %>% 
+  embedding() %>% 
+  layer_flatten()
+
+context_vector <- input_context %>%
+  embedding() %>%
+  layer_flatten()
+
+dot_product <- layer_dot(list(target_vector, context_vector), axes = 1)
+output <- layer_dense(dot_product, units = 1, activation = "sigmoid")
+
+model <- keras_model(list(input_target, input_context), output)
+model %>% compile(loss = "binary_crossentropy", optimizer = "adam")
+summary(model)
+```
+
+Model training
+https://github.com/rstudio/keras/issues/244
+```{r}
+
+model %>%
+  fit_generator(
+    skipgrams_generator(maraprmay2019_clean$post, tokenizer, skip_window, negative_samples),
+    steps_per_epoch = 10000, epochs = 1
+    )
+
+```
+
+Extracting weights for word vectors
+```{r}
+embedding_matrix <- get_weights(model)[[1]]
+
+words <- data_frame(
+  word = names(tokenizer$word_index), 
+  id = as.integer(unlist(tokenizer$word_index))
+)
+
+words <- words %>%
+  filter(id <= tokenizer$num_words) %>%
+  arrange(id)
+
+row.names(embedding_matrix) <- c("UNK", words$word)
+
+dim(embedding_matrix)
+```
+
+Find similar words
+```{r}
+find_similar_words <- function(word, embedding_matrix, n = 5) {
+  similarities <- embedding_matrix[word, , drop = FALSE] %>%
+    sim2(embedding_matrix, y = ., method = "cosine")
+
+  similarities[,1] %>% sort(decreasing = TRUE) %>% head(n)
+}
+
+find_similar_words("lone", embedding_matrix)
+find_similar_words("depress", embedding_matrix)
+find_similar_words("isolated", embedding_matrix)
+
+```
+
+Visualize the results in two dimensions
+```{r}
+
+tsne <- Rtsne(embedding_matrix[2:500,], perplexity = 50, pca = FALSE)
+
+tsne_plot <- tsne$Y %>%
+  as.data.frame() %>%
+  mutate(word = row.names(embedding_matrix)[2:500]) %>%
+  ggplot(aes(x = V1, y = V2, label = word)) + 
+  geom_text(size = 3)
+
+tsne_plot
+```

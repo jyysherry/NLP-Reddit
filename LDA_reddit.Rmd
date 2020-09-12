@@ -1,0 +1,210 @@
+---
+title: "LDA_reddit"
+author: "Sherry Yueyi Jiang"
+date: "7/1/2020"
+output: html_document
+---
+```{r}
+library(stm)
+library(tidyverse)
+library(lubridate)
+library(tidytext)
+library(tm)
+```
+
+```{r}
+setwd("~/Documents/CSS Summer Institute /hopelab/")
+
+lonely2019 <- read.csv("lonelydata2019.csv") %>%
+              mutate(date = as_datetime(created_utc), year = 2019) %>%
+              select(date, post, year) 
+              
+  
+lonely2020 <- read.csv("lonelydata2020.csv") %>%
+              mutate(date = as_datetime(created_utc), year = 2020) %>%
+              select(date, post, year) 
+
+
+lonely2019_cleaned = lonely2019 %>%
+           mutate(post = str_replace_all(post, "https.+",""), # Many contain URLs, which we don't want considered in the mode
+                  post = str_replace_all(post, "[^[:alnum:]]", " "), #remove all the non-alphanumeric characters
+                  post = str_replace_all(post, "malone", ""), #remove "post malone"
+                  post = str_replace_all(post, "removed", ""), #remove "removed"
+                  post = str_replace_all(post, "deleted", "") %>% #remove "deleted"
+                  tolower() %>%  # turn text into lowercase
+                  stripWhitespace()  #%>%  remove whitespace
+)
+
+lonely2020_cleaned = lonely2020 %>%
+           mutate(post = str_replace_all(post, "https.+",""), # Many contain URLs, which we don't want considered in the mode
+                  post = str_replace_all(post, "[^[:alnum:]]", " "), #remove all the non-alphanumeric characters
+                  post = str_replace_all(post, "malone", ""), #remove "post malone"
+                  post = str_replace_all(post, "removed", ""), #remove "removed"
+                  post = str_replace_all(post, "deleted", "") %>% #remove "deleted"
+                  tolower() %>%  # turn text into lowercase
+                  stripWhitespace()  #%>%  remove whitespace
+)
+
+
+#convert date to numeric for fitting to the stm model later
+
+lonely2019_cleaned$time = as.numeric(lonely2019_cleaned$date)
+lonely2020_cleaned$time = as.numeric(lonely2020_cleaned$date)
+
+
+
+#The textProcessor function automatically removes a) punctuation; b) stop words; c) numbers, and d) stems each word.
+
+#lonely2019
+data_processed_2019 <- textProcessor(lonely2019_cleaned$post, metadata = lonely2019_cleaned)
+
+
+out.1 <- prepDocuments(data_processed_2019$documents, data_processed_2019$vocab, data_processed_2019$meta)
+
+docs.1 <- out.1$documents
+vocab.1 <- out.1$vocab
+meta.1 <-out.1$meta
+
+
+
+#lonely2020
+data_processed_2020 <- textProcessor(lonely2020_cleaned$post, metadata = lonely2020_cleaned)
+
+
+out.2 <- prepDocuments(data_processed_2020$documents, data_processed_2020$vocab, data_processed_2020$meta)
+
+docs.2 <- out.2$documents
+vocab.2 <- out.2$vocab
+meta.2 <-out.2$meta
+
+
+
+```
+
+What is the prevalence of topics over time in 2019 and 2020?
+
+```{r}
+
+stm.out.1 <- stm(documents = out.1$documents, vocab = out.1$vocab,
+              K = 10, prevalence =~ s(time),
+              max.em.its = 75, data = out.1$meta,
+              init.type = "Spectral", verbose = FALSE)
+
+
+predict_topics_2019 <-estimateEffect(formula = 1:10 ~ s(time) , stmobj = stm.out.1, metadata = out.1$meta, uncertainty = "Global")
+
+
+plot(predict_topics_2019, covariate = "time", topics = c(2,6,1,9),
+ model = stm.out.1, method = "continuous",
+ xlab = "Time",
+ main = "Prevalence of Topics over Time in 2019",
+ xaxt="n",
+ xlim = c(1551398578, 1559343820),
+ ylim = c(0, 0.3),
+ yaxis = "i",
+ printlegend=F
+ )
+
+axis(1,at=c(1551398578,1554076800,1556668800),labels=c("March 1st","April 1st","May 1st"),las=1)
+legend("topright",legend=c("Topic: Self Doubt","Topic: Social Angst", "Topic: Reaching out", "Topic: Stories (Family, Prom)"), col=c("red","cadetblue1", "green", "purple"), cex = 1,
+   lty=1)
+
+
+
+```
+
+```{r}
+
+stm.out.2 <- stm(documents = out.2$documents, vocab = out.2$vocab,
+              K = 10, prevalence =~ s(time),
+              max.em.its = 75, data = out.2$meta,
+              init.type = "Spectral", verbose = FALSE)
+
+predict_topics_2020 <-estimateEffect(formula = 1:10 ~ s(time) , stmobj = stm.out.2, metadata = out.2$meta, uncertainty = "Global")
+
+
+plot(predict_topics_2020, covariate = "time", topics = c(10,7,4,3),
+ model = stm.out.2, method = "continuous",
+ xlab = "Time",
+ main = "Prevalence of Topics over Time in 2020",
+ xaxt="n",
+ xlim = c(1583021270, 1590969149),
+ ylim = c(0, 0.3),
+ printlegend=F
+ )
+
+axis(1,at=c(1583021270,1585699200,1588291200),labels=c("March 1st","April 1st","May 1st"),las=1)
+legend("topright",legend=c("Topic: Self Doubt","Topic: Social Angst", "Topic: Reaching out", "Topic: School (Feelings)"), col=c("red","cadetblue1", "green", "purple"), cex = 1,
+   lty=1)
+
+```
+
+Let's first look at word clouds by topic
+```{r}
+library(wordcloud)
+
+par(mar=c(0.5, 0.5, 0.5, 0.5))
+cloud(stm.out.1, topic = 1, scale = c(2.25,.5))
+
+cloud(stm.out.2, topic = 1, scale = c(2.25,.5))
+
+```
+
+
+Topic correlations
+```{r}
+# library(igraph)
+# 
+# mod.out.corr <- topicCorr(stm.out.1)
+# plot(mod.out.corr)
+
+```
+
+Frequency of posts for each topic
+
+```{r}
+
+#https://juliasilge.github.io/tidytext/reference/stm_tidiers.html
+td_theta <- tidytext::tidy(stm.out.1, matrix = "theta")
+
+ggplot(td_theta, aes(gamma, fill = as.factor(topic))) +
+  geom_histogram(alpha = 0.8, show.legend = FALSE) +
+  facet_wrap(~ topic, ncol = 3) +
+  labs(title = "Distribution of document probabilities for each topic",
+       y = "Number of documents", x = expression(theta))
+
+#theta is distribution of topics over documents (probability of topic given the document)
+#dirichlet priors : 1) alpha is topics over documents 2) tokens over topics
+```
+
+Topic annotation
+
+Let's first look at the topics
+```{r}
+as.data.frame(t(labelTopics(stm.out.1, n = 10)$prob))
+as.data.frame(t(labelTopics(stm.out.2, n = 10)$prob))
+
+```
+
+Actual post content of the topics might help interpret the topic.
+
+```{r}
+
+plot(stm.out.1, type = "labels", topics = c(1:5), main = "Topic terms")
+
+
+findThoughts(stm.out.1, out.1$meta$post,
+     n = 7, topics = 10)
+```
+
+
+```{r}
+
+plot(stm.out.2, type = "labels", topics = c(1:5), main = "Topic terms")
+
+
+findThoughts(stm.out.2, out.1$meta$post,
+     n = 7, topics = 10)
+```
+
+
