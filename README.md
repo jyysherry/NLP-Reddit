@@ -1,2 +1,2 @@
 # NLP-Reddit
- This is an ongoing project aiming to characterize loneliness in young adults and adolescents using Reddit data.
+ Script to crawl Reddit data and characterize loneliness in young adults and adolescents.
